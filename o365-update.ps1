@@ -2076,7 +2076,9 @@ function Test-NetworkConnectivity {
         $source = Get-PSRepository -Name $Repository -ErrorAction Stop
         $sourceUri = [uri]$source.SourceLocation
         if ($sourceUri.IsAbsoluteUri -and $sourceUri.Scheme -in @('https', 'http')) {
-            $null = Invoke-WebRequest -Uri $sourceUri -Method Head -TimeoutSec 10 -ErrorAction Stop
+            # PSGallery rejects HEAD requests with HTTP 405. A lightweight GET
+            # verifies the repository endpoint without relying on that method.
+            $null = Invoke-WebRequest -Uri $sourceUri -Method Get -TimeoutSec 10 -MaximumRedirection 5 -ErrorAction Stop
         }
         elseif (-not (Test-Path -LiteralPath $source.SourceLocation -PathType Container)) {
             throw "Repository path '$($source.SourceLocation)' is unavailable."
