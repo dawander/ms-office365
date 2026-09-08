@@ -1414,11 +1414,21 @@ function Install-ModuleWithProgress {
         param($ModuleName, $InstallParams, $Operation, $LanguageMode, $ProgressFilePath)
         $ErrorActionPreference = 'Stop'
         $ProgressPreference = 'SilentlyContinue'
+        $ConfirmPreference = 'None'
+        $PSDefaultParameterValues['*:Confirm'] = $false
         
         try {
             # Set the same optimizations in the job
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             [Net.ServicePointManager]::DefaultConnectionLimit = 12
+
+            # Start-Job runs in a separate process, so provider and repository
+            # consent from the parent session is not available here.
+            $nugetProvider = Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue
+            if (-not $nugetProvider) {
+                Install-PackageProvider -Name NuGet -Force -Scope CurrentUser -Confirm:$false -ErrorAction Stop
+            }
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
             
             # Create progress tracking for Az and Graph modules in constrained mode
             $isConstrainedLargeModule = ($LanguageMode -eq 'ConstrainedLanguage' -and 
@@ -1903,6 +1913,12 @@ function Install-ModuleWithProgress {
         
         Write-Progress @progressParams
         
+        # Wait-Job throws when the child is blocked on an interactive prompt.
+        # The job is configured as non-interactive above, but surface a useful
+        # error if a provider or module still requests input.
+        if ($job.State -eq 'Blocked') {
+            throw "Installation job is blocked waiting for user interaction. Ensure the NuGet provider and PSGallery trust settings are available."
+        }
         $null = Wait-Job -Job $job -Timeout 1 -ErrorAction Stop
         $iteration++
         
