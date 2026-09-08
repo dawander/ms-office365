@@ -2116,6 +2116,7 @@ function Get-ModuleVersionInfo {
     $versionInfo = @{
         ModuleName = $ModuleName
         IsInstalled = $false
+        IsRegistered = $false
         IsBundled = $false
         LocalVersion = $null
         OnlineVersion = $null
@@ -2135,25 +2136,31 @@ function Get-ModuleVersionInfo {
         
         if ($installedModules) {
             $versionInfo.IsInstalled = $true
+            $versionInfo.IsRegistered = $true
             $versionInfo.LocalVersion = $installedModules[0].Version
             $versionInfo.MultipleVersionsInstalled = ($installedModules | Measure-Object).Count -gt 1
         }
         
-        # If not found via Get-InstalledModule, check for modules bundled with PS7 ($PSHOME\Modules).
-        # Bundled modules ship inside the PS7 installation directory and are never registered with
-        # PowerShellGet, so Get-InstalledModule cannot see them -- but they are fully functional.
+        # Get-InstalledModule only sees modules registered by PowerShellGet. A module can also
+        # be installed by another tool or copied into PSModulePath, so inspect available modules
+        # before deciding that an installation is missing.
         if (-not $versionInfo.IsInstalled) {
             $psHomeModulePath = Join-Path $PSHOME 'Modules'
-            $bundledModule = Get-Module -Name $ModuleName -ListAvailable -ErrorAction SilentlyContinue |
-                             Where-Object { $_.ModuleBase -like "$psHomeModulePath*" } |
-                             Sort-Object Version -Descending |
-                             Select-Object -First 1
+            $availableModules = @(Get-Module -Name $ModuleName -ListAvailable -ErrorAction SilentlyContinue |
+                Sort-Object { [version]$_.Version } -Descending)
+            $availableModule = $availableModules | Select-Object -First 1
             
-            if ($bundledModule) {
+            if ($availableModule) {
                 $versionInfo.IsInstalled = $true
-                $versionInfo.IsBundled   = $true
-                $versionInfo.LocalVersion = $bundledModule.Version
-                Write-Verbose "Module '$ModuleName' found as PS7 bundled module v$($bundledModule.Version) at $($bundledModule.ModuleBase)"
+                $versionInfo.InstalledVersions = $availableModules
+                $versionInfo.LocalVersion = $availableModule.Version
+                $versionInfo.MultipleVersionsInstalled = $availableModules.Count -gt 1
+                $versionInfo.IsBundled = $availableModule.ModuleBase -like "$psHomeModulePath*"
+                if ($versionInfo.IsBundled) {
+                    Write-Verbose "Module '$ModuleName' found as PS7 bundled module v$($availableModule.Version) at $($availableModule.ModuleBase)"
+                } else {
+                    Write-Verbose "Module '$ModuleName' found on PSModulePath at v$($availableModule.Version) ($($availableModule.ModuleBase))"
+                }
             }
         }
         
@@ -2166,6 +2173,11 @@ function Get-ModuleVersionInfo {
             if ($versionInfo.IsInstalled) {
                 if ([version]$versionInfo.OnlineVersion -gt [version]$versionInfo.LocalVersion) {
                     $versionInfo.UpdateAvailable = $true
+                    # Update-Module requires a PowerShellGet registration. For modules
+                    # discovered only on PSModulePath, install the newer copy instead.
+                    if (-not $versionInfo.IsRegistered) {
+                        $versionInfo.InstallRecommended = $true
+                    }
                     
                     # Determine if update is recommended based on version difference
                     $localVersion = [version]$versionInfo.LocalVersion
